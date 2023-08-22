@@ -1,4 +1,6 @@
-package com.grpc;
+package com.grpc
+
+import androidx.annotation.NonNull;
 
 import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.Promise;
@@ -7,8 +9,6 @@ import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.WritableMap;
-
-import java.util.HashMap;
 
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
@@ -30,6 +30,7 @@ public class GrpcModule extends ReactContextBaseJavaModule {
         }
     }
 
+    @NonNull
     @Override
     public String getName() {
         return "GrpcModule";
@@ -45,22 +46,24 @@ public class GrpcModule extends ReactContextBaseJavaModule {
         this.port = port;
     }
 
-    @ReactMethod()
-    public void greet(ReadableMap message, Promise promise) {
-        try {
-            checkHostAndPort();
-            ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
-            GreeterGrpc.GreeterBlockingStub stub = GreeterGrpc.newBlockingStub(channel);
-            HelloRequest request = HelloRequest.newBuilder()
-                .setName(message.getString("name"))
-                .build();
+	@ReactMethod()
+	public void greet(ReadableMap message, Promise promise) {
+		try {
+			checkHostAndPort();
+			ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
+			GreeterGrpc.GreeterBlockingStub stub = GreeterGrpc.newBlockingStub(channel);
+			HelloRequest request = HelloRequest.newBuilder()
+				.setName(message.getString("Name"))
+				.setLastname(message.getString("Lastname"))
+				.build();
 
-            HelloResponse response = stub.greet(request);
-            WritableMap result = Arguments.createMap();
-            result.putString("greetings", response.getGreetings());
-            promise.resolve(result);
-        } catch (Exception e) {
-            promise.reject("Error", "Unable to call remote procedure \"greet\"", e);
-        }
-    }
+			HelloResponse response = stub.greet(request);
+			WritableMap result = Arguments.createMap();
+			result.putString("Greetings", response.getGreetings());
+
+			promise.resolve(result);
+		} catch (Exception e) {
+			promise.reject("Error", "Unable to call remote procedure \"greet\"", e);
+		}
+	}
 }

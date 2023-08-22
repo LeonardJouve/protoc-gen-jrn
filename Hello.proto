@@ -11,6 +11,7 @@ service Greeter {
 
 message HelloRequest {
     string name = 1;
+    string lastname = 2;
 }
 
 message HelloResponse {
