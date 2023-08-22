@@ -19,7 +19,7 @@ func main() {
 }
 
 func generate(plugin *protogen.Plugin, in *protogen.File) error {
-	fileName := *in.Proto.Options.JavaOuterClassname + ".java"
+	fileName := "GrpcModule.java"
 	out := plugin.NewGeneratedFile(fileName, protogen.GoImportPath(upper(string(in.GoImportPath))))
 	out.P("package ", *in.Proto.Options.JavaPackage, ";")
 
@@ -94,6 +94,51 @@ public class GrpcModule extends ReactContextBaseJavaModule {
 	return nil
 }
 
+func generateMethod(method *protogen.Method, variables *map[string]string, lists *map[string][]string, out *protogen.GeneratedFile) error {
+	(*variables)["methodName"] = lower(string(method.Desc.Name()))
+	(*variables)["inputKind"] = upper(string(method.Input.Desc.Name()))
+	(*variables)["outputKind"] = upper(string(method.Output.Desc.Name()))
+
+	// TODO: handle nested messages
+
+	for _, field := range method.Input.Fields {
+		(*lists)["inputFieldTypes"] = append((*lists)["inputFieldTypes"], upper(field.Desc.Kind().String())) // TODO: java type
+		(*lists)["inputFieldNamesLower"] = append((*lists)["inputFieldNamesLower"], lower(string(field.Desc.Name())))
+		(*lists)["inputFieldNamesUpper"] = append((*lists)["inputFieldNamesUpper"], upper(string(field.Desc.Name())))
+	}
+
+	for _, field := range method.Output.Fields {
+		(*lists)["outputFieldTypes"] = append((*lists)["outputFieldTypes"], upper(field.Desc.Kind().String())) // TODO: java type
+		(*lists)["outputFieldNamesLower"] = append((*lists)["outputFieldNamesLower"], lower(string(field.Desc.Name())))
+		(*lists)["outputFieldNamesUpper"] = append((*lists)["outputFieldNamesUpper"], upper(string(field.Desc.Name())))
+	}
+
+	const template = `
+	@ReactMethod()
+	public void $methodName$(ReadableMap message, Promise promise) {
+		try {
+			checkHostAndPort();
+			ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
+			$serviceName$Grpc.$serviceName$BlockingStub stub = $serviceName$Grpc.newBlockingStub(channel);
+			$inputKind$ request = $inputKind$.newBuilder()
+				.set$*inputFieldNamesUpper*$(message.get$*inputFieldTypes*$("$*inputFieldNamesLower*$"))
+				.build();
+
+			$outputKind$ response = stub.$methodName$(request);
+			WritableMap result = Arguments.createMap();
+			result.put$*outputFieldTypes*$("$*outputFieldNamesLower*$", response.get$*outputFieldNamesUpper*$());
+
+			promise.resolve(result);
+		} catch (Exception e) {
+			promise.reject("Error", "Unable to call remote procedure \"$methodName$\"", e);
+		}
+	}`
+
+	out.P(format(template, variables, lists))
+
+	return nil
+}
+
 func format(template string, variables *map[string]string, lists *map[string][]string) string {
 	result := strings.Clone(template)
 	for key, value := range *variables {
@@ -160,49 +205,6 @@ func format(template string, variables *map[string]string, lists *map[string][]s
 		}
 	}
 	return result
-}
-
-func generateMethod(method *protogen.Method, variables *map[string]string, lists *map[string][]string, out *protogen.GeneratedFile) error {
-	(*variables)["methodName"] = lower(string(method.Desc.Name()))
-	(*variables)["inputKind"] = upper(string(method.Input.Desc.Name()))
-	(*variables)["outputKind"] = upper(string(method.Output.Desc.Name()))
-
-	for _, field := range method.Input.Fields {
-		(*lists)["inputFieldTypes"] = append((*lists)["inputFieldTypes"], upper(field.Desc.Kind().String())) // TODO: java type
-		(*lists)["inputFieldNamesLower"] = append((*lists)["inputFieldNamesLower"], lower(string(field.Desc.Name())))
-		(*lists)["inputFieldNamesUpper"] = append((*lists)["inputFieldNamesUpper"], upper(string(field.Desc.Name())))
-	}
-
-	for _, field := range method.Output.Fields {
-		(*lists)["outputFieldTypes"] = append((*lists)["outputFieldTypes"], upper(field.Desc.Kind().String())) // TODO: java type
-		(*lists)["outputFieldNamesLower"] = append((*lists)["outputFieldNamesLower"], lower(string(field.Desc.Name())))
-		(*lists)["outputFieldNamesUpper"] = append((*lists)["outputFieldNamesUpper"], upper(string(field.Desc.Name())))
-	}
-
-	const template = `
-	@ReactMethod()
-	public void $methodName$(ReadableMap message, Promise promise) {
-		try {
-			checkHostAndPort();
-			ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
-			$serviceName$Grpc.$serviceName$BlockingStub stub = $serviceName$Grpc.newBlockingStub(channel);
-			$inputKind$ request = $inputKind$.newBuilder()
-				.set$*inputFieldNamesUpper*$(message.get$*inputFieldTypes*$("$*inputFieldNamesLower*$"))
-				.build();
-
-			$outputKind$ response = stub.$methodName$(request);
-			WritableMap result = Arguments.createMap();
-			result.put$*outputFieldTypes*$("$*outputFieldNamesLower*$", response.get$*outputFieldNamesUpper*$());
-
-			promise.resolve(result);
-		} catch (Exception e) {
-			promise.reject("Error", "Unable to call remote procedure \"$methodName$\"", e);
-		}
-	}`
-
-	out.P(format(template, variables, lists))
-
-	return nil
 }
 
 func upper(str string) string {
