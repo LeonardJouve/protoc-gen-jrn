@@ -21,7 +21,7 @@ func main() {
 func generate(plugin *protogen.Plugin, in *protogen.File) error {
 	fileName := *in.Proto.Options.JavaOuterClassname + ".java"
 	out := plugin.NewGeneratedFile(fileName, protogen.GoImportPath(upper(string(in.GoImportPath))))
-	out.P("package ", *in.Proto.Options.JavaPackage)
+	out.P("package ", *in.Proto.Options.JavaPackage, ";")
 
 	generateModule(out)
 
@@ -169,12 +169,14 @@ func generateMethod(method *protogen.Method, variables *map[string]string, lists
 
 	for _, field := range method.Input.Fields {
 		(*lists)["inputFieldTypes"] = append((*lists)["inputFieldTypes"], upper(field.Desc.Kind().String())) // TODO: java type
-		(*lists)["inputFieldNames"] = append((*lists)["inputFieldNames"], upper(string(field.Desc.Name())))
+		(*lists)["inputFieldNamesLower"] = append((*lists)["inputFieldNamesLower"], lower(string(field.Desc.Name())))
+		(*lists)["inputFieldNamesUpper"] = append((*lists)["inputFieldNamesUpper"], upper(string(field.Desc.Name())))
 	}
 
 	for _, field := range method.Output.Fields {
 		(*lists)["outputFieldTypes"] = append((*lists)["outputFieldTypes"], upper(field.Desc.Kind().String())) // TODO: java type
-		(*lists)["outputFieldNames"] = append((*lists)["outputFieldNames"], upper(string(field.Desc.Name())))
+		(*lists)["outputFieldNamesLower"] = append((*lists)["outputFieldNamesLower"], lower(string(field.Desc.Name())))
+		(*lists)["outputFieldNamesUpper"] = append((*lists)["outputFieldNamesUpper"], upper(string(field.Desc.Name())))
 	}
 
 	const template = `
@@ -185,12 +187,12 @@ func generateMethod(method *protogen.Method, variables *map[string]string, lists
 			ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
 			$serviceName$Grpc.$serviceName$BlockingStub stub = $serviceName$Grpc.newBlockingStub(channel);
 			$inputKind$ request = $inputKind$.newBuilder()
-				.set$*inputFieldNames*$(message.get$*inputFieldTypes*$("$*inputFieldNames*$"))
+				.set$*inputFieldNamesUpper*$(message.get$*inputFieldTypes*$("$*inputFieldNamesLower*$"))
 				.build();
 
 			$outputKind$ response = stub.$methodName$(request);
 			WritableMap result = Arguments.createMap();
-			result.put$*outputFieldTypes*$("$*outputFieldNames*$", response.get$*outputFieldNames*$());
+			result.put$*outputFieldTypes*$("$*outputFieldNamesLower*$", response.get$*outputFieldNamesUpper*$());
 
 			promise.resolve(result);
 		} catch (Exception e) {
