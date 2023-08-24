@@ -4,48 +4,10 @@ import (
 	"strings"
 
 	"google.golang.org/protobuf/compiler/protogen"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
-func main() {
-	protogen.Options{}.Run(func(plugin *protogen.Plugin) error {
-		for _, file := range plugin.Files {
-			err := generate(plugin, file)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
-func generate(plugin *protogen.Plugin, in *protogen.File) error {
-	fileName := "GrpcModule.java"
-	out := plugin.NewGeneratedFile(fileName, protogen.GoImportPath(upper(string(in.GoImportPath))))
-	out.P("package ", *in.Proto.Options.JavaPackage, ";")
-
-	generateModule(out)
-
-	variables := make(map[string]string)
-	lists := make(map[string][]string)
-
-	for _, service := range in.Services {
-		variables["serviceName"] = upper(string(service.Desc.Name()))
-
-		for _, method := range service.Methods {
-			err := generateMethod(method, &variables, &lists, out)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	out.P("}")
-
-	return nil
-}
-
-func generateModule(out *protogen.GeneratedFile) error {
-	out.P(`
+const template = `package $packageName$;
 import androidx.annotation.NonNull;
 
 import com.facebook.react.bridge.Arguments;
@@ -60,7 +22,11 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 
 public class GrpcModule extends ReactContextBaseJavaModule {
-    String host;
+	private class Messages {
+		$*messages*$
+	}
+	
+	String host;
     Integer port;
 
     GrpcModule(ReactApplicationContext context) {
@@ -90,53 +56,171 @@ public class GrpcModule extends ReactContextBaseJavaModule {
     @ReactMethod()
     public void setPort(Integer port) {
         this.port = port;
-    }`)
+    }
+
+	$*methods*$
+}`
+
+var kinds = map[protoreflect.Kind]string{
+	protoreflect.BoolKind:     "Boolean",
+	protoreflect.Int32Kind:    "Int",
+	protoreflect.Sint32Kind:   "Int",
+	protoreflect.Uint32Kind:   "Int",
+	protoreflect.Int64Kind:    "Int",
+	protoreflect.Sint64Kind:   "Int",
+	protoreflect.Uint64Kind:   "Int",
+	protoreflect.Sfixed32Kind: "Int",
+	protoreflect.Fixed32Kind:  "Int",
+	protoreflect.FloatKind:    "Int",
+	protoreflect.Sfixed64Kind: "Int",
+	protoreflect.Fixed64Kind:  "Int",
+	protoreflect.DoubleKind:   "Double",
+	protoreflect.StringKind:   "String",
+	// TODO: handle these
+	// protogen.EnumKind: ""
+	// protogen.BytesKind: "",
+	// protogen.MessageKind: "",
+	// protogen.GroupKind:   "",
+}
+
+func main() {
+	protogen.Options{}.Run(func(plugin *protogen.Plugin) error {
+		for _, file := range plugin.Files {
+			err := generate(plugin, file)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func generate(plugin *protogen.Plugin, in *protogen.File) error {
+	fileName := "GrpcModule.java"
+	out := plugin.NewGeneratedFile(fileName, protogen.GoImportPath(upper(string(in.GoImportPath))))
+
+	variables := make(map[string]string)
+	lists := make(map[string][]string)
+
+	variables["packageName"] = *in.Proto.Options.JavaPackage
+
+	generateMessages(in.Messages, &lists)
+
+	generateServices(in.Services, &lists)
+
+	out.P(format(template, &variables, &lists))
+
 	return nil
 }
 
-func generateMethod(method *protogen.Method, variables *map[string]string, lists *map[string][]string, out *protogen.GeneratedFile) error {
+func generateServices(services []*protogen.Service, lists *map[string][]string) {
+	variables := make(map[string]string)
+
+	for _, service := range services {
+		variables["serviceName"] = upper(string(service.Desc.Name()))
+		generateMethods(service.Methods, &variables, lists)
+	}
+}
+
+func generateMethods(methods []*protogen.Method, variables *map[string]string, lists *map[string][]string) {
+	for _, method := range methods {
+		(*lists)["methods"] = append((*lists)["methods"], generateMethod(method, variables, lists))
+	}
+}
+
+func generateMethod(method *protogen.Method, variables *map[string]string, lists *map[string][]string) string {
 	(*variables)["methodName"] = lower(string(method.Desc.Name()))
 	(*variables)["inputKind"] = upper(string(method.Input.Desc.Name()))
 	(*variables)["outputKind"] = upper(string(method.Output.Desc.Name()))
 
-	// TODO: handle nested messages
-
 	for _, field := range method.Input.Fields {
-		(*lists)["inputFieldTypes"] = append((*lists)["inputFieldTypes"], upper(field.Desc.Kind().String())) // TODO: java type
+		inputFieldType, ok := kinds[field.Desc.Kind()]
+		if !ok {
+			continue
+		}
+		(*lists)["inputFieldTypes"] = append((*lists)["inputFieldTypes"], upper(inputFieldType))
 		(*lists)["inputFieldNamesLower"] = append((*lists)["inputFieldNamesLower"], lower(string(field.Desc.Name())))
 		(*lists)["inputFieldNamesUpper"] = append((*lists)["inputFieldNamesUpper"], upper(string(field.Desc.Name())))
 	}
 
 	for _, field := range method.Output.Fields {
-		(*lists)["outputFieldTypes"] = append((*lists)["outputFieldTypes"], upper(field.Desc.Kind().String())) // TODO: java type
+		outputFieldType, ok := kinds[field.Desc.Kind()]
+		if !ok {
+			continue
+		}
+		(*lists)["outputFieldTypes"] = append((*lists)["outputFieldTypes"], upper(outputFieldType))
 		(*lists)["outputFieldNamesLower"] = append((*lists)["outputFieldNamesLower"], lower(string(field.Desc.Name())))
 		(*lists)["outputFieldNamesUpper"] = append((*lists)["outputFieldNamesUpper"], upper(string(field.Desc.Name())))
 	}
 
-	const template = `
-	@ReactMethod()
+	const template = `@ReactMethod()
 	public void $methodName$(ReadableMap message, Promise promise) {
 		try {
 			checkHostAndPort();
 			ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port).usePlaintext().build();
 			$serviceName$Grpc.$serviceName$BlockingStub stub = $serviceName$Grpc.newBlockingStub(channel);
-			$inputKind$ request = $inputKind$.newBuilder()
-				.set$*inputFieldNamesUpper*$(message.get$*inputFieldTypes*$("$*inputFieldNamesLower*$"))
-				.build();
-
+			$inputKind$ request = Messages.set$inputKind$(message);
 			$outputKind$ response = stub.$methodName$(request);
-			WritableMap result = Arguments.createMap();
-			result.put$*outputFieldTypes*$("$*outputFieldNamesLower*$", response.get$*outputFieldNamesUpper*$());
-
+			WritableMap result = Messages.get$outputKind$(response);
 			promise.resolve(result);
 		} catch (Exception e) {
 			promise.reject("Error", "Unable to call remote procedure \"$methodName$\"", e);
 		}
 	}`
 
-	out.P(format(template, variables, lists))
+	return format(template, variables, lists)
+}
 
-	return nil
+func generateMessages(messages []*protogen.Message, lists *map[string][]string) {
+	for _, message := range messages {
+		(*lists)["messages"] = append((*lists)["messages"], generateMessage(message))
+	}
+}
+
+func generateMessage(message *protogen.Message) string {
+	variables := make(map[string]string)
+	lists := make(map[string][]string)
+
+	variables["messageName"] = upper(string(message.Desc.Name()))
+
+	var nestedMessages string
+	for _, nestedMessage := range message.Messages {
+		nestedMessages += generateMessage(nestedMessage)
+	}
+	variables["nestedMessages"] = nestedMessages
+
+	for _, field := range message.Fields {
+		fieldKind := field.Desc.Kind()
+		fieldType, ok := kinds[fieldKind]
+		if !ok {
+			if fieldKind == protoreflect.MessageKind {
+				lists["fieldTypes"] = append(lists["fieldTypes"], upper(string(field.Message.Desc.Name())))
+				lists["fieldNames"] = append(lists["fieldNamesLower"], lower(string(field.Desc.Name())))
+				lists["fieldNames"] = append(lists["fieldNamesUpper"], upper(string(field.Desc.Name())))
+			}
+			continue
+		}
+		lists["fieldTypes"] = append(lists["fieldTypes"], fieldType)
+		lists["fieldNamesLower"] = append(lists["fieldNamesLower"], lower(string(field.Desc.Name())))
+		lists["fieldNamesUpper"] = append(lists["fieldNamesUpper"], upper(string(field.Desc.Name())))
+	}
+
+	template := `private $messageName$ set$messageName$(ReadableMap message) {
+			return $messageName$.newBuilder()
+				.set$*fieldNamesUpper*$(message.get$*fieldTypes*$("$*fieldNamesLower*$"))
+				.build();
+		}
+		private WritableMap get$messageName$($messageName$ message) {
+			WritableMap writableMap = Arguments.createMap();
+			writableMap.put$*fieldTypes*$("$*fieldNamesLower*$", message.get$*fieldNamesUpper*$());
+			return writableMap;
+		}`
+	if len(nestedMessages) > 0 {
+		template += `
+		$nestedMessages$`
+	}
+
+	return format(template, &variables, &lists)
 }
 
 func format(template string, variables *map[string]string, lists *map[string][]string) string {
@@ -167,7 +251,7 @@ func format(template string, variables *map[string]string, lists *map[string][]s
 
 			var variablesInLine []string
 			var listLength int
-			for i := 0; i < len(line); i++ {
+			for i := 0; i < len(line)-1; i++ {
 				if line[i] == '$' && line[i+1] == '*' {
 					variableStart := i + 2
 					variableEnd := strings.Index(line[variableStart:], "*$")
