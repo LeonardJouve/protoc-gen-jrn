@@ -8,6 +8,7 @@ import (
 )
 
 const template = `package $packageName$;
+
 import androidx.annotation.NonNull;
 
 import com.facebook.react.bridge.Arguments;
@@ -22,7 +23,7 @@ import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 
 public class GrpcModule extends ReactContextBaseJavaModule {
-	private class Messages {
+	private static class Messages {
 		$*messages*$
 	}
 	
@@ -173,19 +174,20 @@ func generateMethod(method *protogen.Method, variables *map[string]string, lists
 
 func generateMessages(messages []*protogen.Message, lists *map[string][]string) {
 	for _, message := range messages {
-		(*lists)["messages"] = append((*lists)["messages"], generateMessage(message))
+		(*lists)["messages"] = append((*lists)["messages"], generateMessage(message, ""))
 	}
 }
 
-func generateMessage(message *protogen.Message) string {
+func generateMessage(message *protogen.Message, parent string) string {
 	variables := make(map[string]string)
 	lists := make(map[string][]string)
 
 	variables["messageName"] = upper(string(message.Desc.Name()))
+	variables["parent"] = parent
 
 	var nestedMessages string
 	for _, nestedMessage := range message.Messages {
-		nestedMessages += generateMessage(nestedMessage)
+		nestedMessages += generateMessage(nestedMessage, parent+variables["messageName"]+".")
 	}
 	variables["nestedMessages"] = nestedMessages
 
@@ -194,25 +196,35 @@ func generateMessage(message *protogen.Message) string {
 		fieldType, ok := kinds[fieldKind]
 		if !ok {
 			if fieldKind == protoreflect.MessageKind {
-				lists["fieldTypes"] = append(lists["fieldTypes"], upper(string(field.Message.Desc.Name())))
-				lists["fieldNames"] = append(lists["fieldNamesLower"], lower(string(field.Desc.Name())))
-				lists["fieldNames"] = append(lists["fieldNamesUpper"], upper(string(field.Desc.Name())))
+				lists["inputFieldTypes"] = append(lists["inputFieldTypes"], "Map")
+				lists["outputFieldTypes"] = append(lists["outputFieldTypes"], "Map")
+				lists["fieldNamesLower"] = append(lists["fieldNamesLower"], lower(string(field.Desc.Name())))
+				lists["fieldNamesUpper"] = append(lists["fieldNamesUpper"], upper(string(field.Desc.Name())))
+				lists["setPrefixes"] = append(lists["setPrefixes"], "Messages.set"+upper(string(field.Message.Desc.Name()))+"(")
+				lists["setSuffixes"] = append(lists["setSuffixes"], ")")
+				lists["getPrefixes"] = append(lists["getPrefixes"], "Messages.get"+upper(string(field.Message.Desc.Name()))+"(")
+				lists["getSuffixes"] = append(lists["getSuffixes"], ")")
 			}
 			continue
 		}
-		lists["fieldTypes"] = append(lists["fieldTypes"], fieldType)
+		lists["inputFieldTypes"] = append(lists["inputFieldTypes"], fieldType)
+		lists["outputFieldTypes"] = append(lists["outputFieldTypes"], fieldType)
 		lists["fieldNamesLower"] = append(lists["fieldNamesLower"], lower(string(field.Desc.Name())))
 		lists["fieldNamesUpper"] = append(lists["fieldNamesUpper"], upper(string(field.Desc.Name())))
+		lists["setPrefixes"] = append(lists["setPrefixes"], "")
+		lists["setSuffixes"] = append(lists["setSuffixes"], "")
+		lists["getPrefixes"] = append(lists["getPrefixes"], "")
+		lists["getSuffixes"] = append(lists["getSuffixes"], "")
 	}
 
-	template := `private $messageName$ set$messageName$(ReadableMap message) {
-			return $messageName$.newBuilder()
-				.set$*fieldNamesUpper*$(message.get$*fieldTypes*$("$*fieldNamesLower*$"))
+	template := `private static $parent$$messageName$ set$messageName$(ReadableMap message) {
+			return $parent$$messageName$.newBuilder()
+				.set$*fieldNamesUpper*$($*setPrefixes*$message.get$*inputFieldTypes*$("$*fieldNamesLower*$")$*setSuffixes*$)
 				.build();
 		}
-		private WritableMap get$messageName$($messageName$ message) {
+		private static WritableMap get$messageName$($parent$$messageName$ message) {
 			WritableMap writableMap = Arguments.createMap();
-			writableMap.put$*fieldTypes*$("$*fieldNamesLower*$", message.get$*fieldNamesUpper*$());
+			writableMap.put$*outputFieldTypes*$("$*fieldNamesLower*$", $*getPrefixes*$message.get$*fieldNamesUpper*$()$*getSuffixes*$);
 			return writableMap;
 		}`
 	if len(nestedMessages) > 0 {
@@ -223,71 +235,68 @@ func generateMessage(message *protogen.Message) string {
 	return format(template, &variables, &lists)
 }
 
-func format(template string, variables *map[string]string, lists *map[string][]string) string {
-	result := strings.Clone(template)
+func formatVariables(template string, variables *map[string]string) string {
+	result := template
 	for key, value := range *variables {
 		result = strings.ReplaceAll(result, "$"+key+"$", value)
 	}
-	for key := range *lists {
-		start := 0
+	return result
+}
+
+func formatLists(template string, lists *map[string][]string) string {
+	lines := strings.Split(template, "\n")
+	resultLines := strings.Builder{}
+
+	for i, line := range lines {
+		var start int
+		lineAmount := -1
+		lineVariables := make(map[string][]string)
 		for start != -1 {
 			oldStart := start
-			start = strings.Index(result[oldStart:], "$*"+key+"*$")
+			start = strings.Index(line[start:], "$*")
 			if start == -1 {
 				break
 			}
 			start += oldStart
-			lineStart := strings.LastIndex(result[:start], "\n")
-			if lineStart == -1 {
+
+			end := strings.Index(line[start:], "*$")
+			if end == -1 {
 				break
 			}
-			lineStart++
-			lineEnd := strings.Index(result[start:], "\n")
-			if lineEnd == -1 {
-				break
-			}
-			lineEnd += start
-			line := result[lineStart:lineEnd]
+			end += start
 
-			var variablesInLine []string
-			var listLength int
-			for i := 0; i < len(line)-1; i++ {
-				if line[i] == '$' && line[i+1] == '*' {
-					variableStart := i + 2
-					variableEnd := strings.Index(line[variableStart:], "*$")
-					if variableEnd == -1 {
-						continue
-					}
-					variableEnd += variableStart
-					variableName := line[variableStart:variableEnd]
-					variable, ok := (*lists)[variableName]
-					if !ok {
-						continue
-					}
-					if variableLen := len(variable); listLength == 0 || listLength > variableLen {
-						listLength = variableLen
-					}
-					if contains(variablesInLine, variableName) {
-						continue
-					}
-					variablesInLine = append(variablesInLine, variableName)
+			name := line[start+2 : end]
+			if variable, ok := (*lists)[name]; ok {
+				if variableLen := len(variable); lineAmount == -1 || lineAmount > variableLen {
+					lineAmount = variableLen
 				}
+				lineVariables[name] = variable
 			}
 
-			var formattedLine string
-			for i := 0; i < listLength; i++ {
-				currentLine := strings.Clone(line)
-				for j := 0; j < len(variablesInLine); j++ {
-					currentLine = strings.ReplaceAll(currentLine, "$*"+variablesInLine[j]+"*$", (*lists)[variablesInLine[j]][i])
-				}
-				if i != 0 {
-					formattedLine += "\n"
-				}
-				formattedLine += currentLine
+			start = end + 2
+		}
+
+		if lineAmount == -1 {
+			lineAmount = 1
+		}
+		for j := 0; j < lineAmount; j++ {
+			currentLine := line
+			for name, value := range lineVariables {
+				currentLine = strings.ReplaceAll(currentLine, "$*"+name+"*$", value[j])
 			}
-			result = strings.ReplaceAll(result, line, formattedLine)
+			if i > 0 {
+				resultLines.WriteByte('\n')
+			}
+			resultLines.WriteString(currentLine)
 		}
 	}
+
+	return resultLines.String()
+}
+
+func format(template string, variables *map[string]string, lists *map[string][]string) string {
+	result := formatVariables(template, variables)
+	result = formatLists(result, lists)
 	return result
 }
 
@@ -303,13 +312,4 @@ func lower(str string) string {
 		return str
 	}
 	return strings.ToLower(str[:1]) + str[1:]
-}
-
-func contains(values []string, value string) bool {
-	for _, v := range values {
-		if v == value {
-			return true
-		}
-	}
-	return false
 }
